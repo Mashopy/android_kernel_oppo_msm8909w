@@ -260,13 +260,6 @@ static enum eSirMacStatusCodes lim_check_sae_pmf_cap(tpPESession session,
 
     return status;
 }
-#else
-static enum eSirMacStatusCodes lim_check_sae_pmf_cap(tpPESession session,
-                                                    tDot11fIERSN *rsn,
-						    enum ani_akm_type akm_type)
-{
-    return eSIR_MAC_SUCCESS_STATUS;
-}
 #endif
 
 unsigned int *akm_type;
@@ -1556,6 +1549,7 @@ limProcessAssocReqFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo,
                 akm_type = lim_translate_rsn_oui_to_akm_type(
                                     Dot11fIERSN.akm_suite[0]);
 
+#ifdef WLAN_FEATURE_SAE
 		status = lim_check_sae_pmf_cap(psessionEntry, &Dot11fIERSN, akm_type);
                     if (eSIR_SUCCESS != status ) {
                         /* Reject pmf disable SAE STA */
@@ -1569,6 +1563,7 @@ limProcessAssocReqFrame(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo,
                                     subType, 0,psessionEntry, NULL);
                         goto error;
                 }
+#endif
 
             } /* end - if(pAssocReq->rsnPresent) */
             if((!pAssocReq->rsnPresent) && pAssocReq->wpaPresent)
