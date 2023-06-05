@@ -41,6 +41,11 @@
 #include "pinctrl-msm.h"
 #include "../pinctrl-utils.h"
 
+#ifdef CONFIG_OPPO
+#include <linux/gpio/driver.h>
+#include <../../gpio/gpiolib.h>
+#include <../../oppo/dap_swd/dap_swd.h>
+#endif
 #define MAX_NR_GPIO 300
 #define PS_HOLD_OFFSET 0x820
 
@@ -385,6 +390,19 @@ static struct pinctrl_desc msm_pinctrl_desc = {
 	.owner = THIS_MODULE,
 };
 
+#ifdef CONFIG_OPPO
+int msm_gpio_get_reg(struct gpio_desc *desc, struct msm_gpio_reg *reg)
+{
+	struct gpio_chip *chip = gpiod_to_chip(desc);
+	struct msm_pinctrl *pctrl = container_of(chip, struct msm_pinctrl, chip);
+	const struct msm_pingroup *g = &pctrl->soc->groups[gpio_chip_hwgpio(desc)];
+
+	reg->io_reg = pctrl->regs + g->io_reg;
+	reg->ctl_reg = pctrl->regs + g->ctl_reg;
+
+	return 0;
+}
+#endif
 static int msm_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 {
 	const struct msm_pingroup *g;
@@ -891,14 +909,16 @@ static const struct irq_domain_ops msm_gpio_domain_ops = {
 
 static struct irq_chip msm_dirconn_irq_chip;
 
-static void msm_gpio_dirconn_handler(struct irq_desc *desc)
+static bool msm_gpio_dirconn_handler(struct irq_desc *desc)
 {
+	int res;
 	struct irq_data *irqd = irq_desc_get_handler_data(desc);
 	struct irq_chip *chip = irq_desc_get_chip(desc);
 
 	chained_irq_enter(chip, desc);
-	generic_handle_irq(irqd->irq);
+	res = generic_handle_irq(irqd->irq);
 	chained_irq_exit(chip, desc);
+	return res == 1;
 }
 
 static void setup_pdc_gpio(struct irq_domain *domain,
@@ -1436,7 +1456,7 @@ static struct irq_chip msm_dirconn_irq_chip = {
 					| IRQCHIP_SET_TYPE_MASKED,
 };
 
-static void msm_gpio_irq_handler(struct irq_desc *desc)
+static bool msm_gpio_irq_handler(struct irq_desc *desc)
 {
 	struct gpio_chip *gc = irq_desc_get_handler_data(desc);
 	const struct msm_pingroup *g;
@@ -1446,6 +1466,7 @@ static void msm_gpio_irq_handler(struct irq_desc *desc)
 	int handled = 0;
 	u32 val;
 	int i;
+	bool ret;
 
 	chained_irq_enter(chip, desc);
 
@@ -1463,11 +1484,13 @@ static void msm_gpio_irq_handler(struct irq_desc *desc)
 		}
 	}
 
+	ret = (handled != 0);
 	/* No interrupts were flagged */
 	if (handled == 0)
-		handle_bad_irq(desc);
+		ret = handle_bad_irq(desc);
 
 	chained_irq_exit(chip, desc);
+	return ret;
 }
 
 static void msm_gpio_setup_dir_connects(struct msm_pinctrl *pctrl)

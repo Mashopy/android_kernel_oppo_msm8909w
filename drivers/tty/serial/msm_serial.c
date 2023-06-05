@@ -194,6 +194,37 @@ struct msm_port {
 
 #define UART_TO_MSM(uart_port)	container_of(uart_port, struct msm_port, uart)
 
+#ifdef CONFIG_OPPO
+// WSW.BSP.Kernel.uart, 2020-4-13, modify for uart log
+static unsigned int user_printk_disable_uart = 1;
+static unsigned int is_user_build;
+
+static int __init set_printk_disable_uart(char *str)
+{
+	char *end;
+	long new = simple_strtol(str, &end, 0);
+	if (end == str || new > INT_MAX || new < INT_MIN)
+		return -EINVAL;
+	user_printk_disable_uart = new;
+	return 1;
+}
+__setup("printk.disable_uart=", set_printk_disable_uart);
+
+static int __init set_serial_buildvariant(char *line)
+{
+	static const char typeuser[]  = "user";
+	static  char oppo_buildvariant[20];
+
+        strlcpy(oppo_buildvariant, line, sizeof(oppo_buildvariant));
+
+        is_user_build = !strncmp(oppo_buildvariant, typeuser, sizeof(typeuser));
+	return 1;
+}
+__setup("buildvariant=", set_serial_buildvariant);
+
+#endif
+
+
 static
 void msm_write(struct uart_port *port, unsigned int val, unsigned int off)
 {
@@ -1920,6 +1951,19 @@ static struct platform_driver msm_platform_driver = {
 static int __init msm_serial_init(void)
 {
 	int ret;
+#ifdef CONFIG_OPPO
+// WSW.BSP.Kernel.uart, 2020-4-13, modify for uart log
+	extern unsigned int oppo_ftm_mode;
+	if (3 != oppo_ftm_mode && user_printk_disable_uart && is_user_build) {
+	    pr_err("msm_serial_init: driver is needn't initialize\n");
+	    return 0;
+	} else if (3 != oppo_ftm_mode && 0 == is_user_build) {
+           printk("userdebug msm_serial_init: driver is needn't initialize\n");
+           return 0;
+        }
+	if (3 == oppo_ftm_mode && is_user_build)
+	    msm_uart_driver.cons = NULL;
+#endif /* CONFIG_OPPO */
 
 	ret = uart_register_driver(&msm_uart_driver);
 	if (unlikely(ret))
@@ -1936,6 +1980,15 @@ static int __init msm_serial_init(void)
 
 static void __exit msm_serial_exit(void)
 {
+#ifdef CONFIG_OPPO
+// WSW.BSP.Kernel.uart, 2020-4-13, modify for uart log
+	extern unsigned int oppo_ftm_mode;
+	if (3 != oppo_ftm_mode && user_printk_disable_uart && is_user_build) {
+	    pr_err("msm_serial_init: driver is needn't initialize\n");
+	    return ;
+	};
+#endif /* CONFIG_OPPO */
+
 	platform_driver_unregister(&msm_platform_driver);
 	uart_unregister_driver(&msm_uart_driver);
 }
