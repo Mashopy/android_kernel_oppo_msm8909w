@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -75,6 +75,10 @@
 	};
 };
 
+&usb_otg {
+	qcom,enumeration-check-for-sdp;
+};
+
 &qcom_crypto {
 	qcom,msm-bus,vectors-KBps =
 		<55 512 0 0>,
@@ -110,21 +114,21 @@
 	gpu-step {
 		trips {
 			gpu-step-trip {
-				temperature = <70000>;
+				temperature = <80000>;
 			};
 		};
 	};
 	cpu0-2-step {
 		trips {
 			cpu0-2-step-trip {
-				temperature = <60000>;
+				temperature = <80000>;
 			};
 		};
 	};
 	cpu1-3-step {
 		trips {
 			cpu1-3-step-trip {
-				temperature = <60000>;
+				temperature = <75000>;
 			};
 		};
 	};
@@ -134,14 +138,15 @@
 		polling-delay = <0>;
 		thermal-sensors = <&pm660_adc_tm 0x51>;
 		thermal-governor = "step_wise";
+		wake-capable-sensor;
 		trips {
 			cpu_freq_trip: cpu-freq-trip {
-				temperature = <40000>;
+				temperature = <43000>;
 				hysteresis = <0>;
 				type = "passive";
 			};
 			modem_mon_trip0: modem-mon-trip0 {
-				temperature = <47000>;
+				temperature = <49000>;
 				hysteresis = <2000>;
 				type = "passive";
 			};
@@ -151,7 +156,7 @@
 				type = "passive";
 			};
 			cpu1_hotplug_trip: cpu1-hotplug-trip {
-				temperature = <49000>;
+				temperature = <55000>;
 				hysteresis = <3000>;
 				type = "passive";
 			};
@@ -160,22 +165,22 @@
 			cpu0_cdev {
 				trip = <&cpu_freq_trip>;
 				cooling-device =
-					<&CPU0 THERMAL_NO_LIMIT 2>;
+					<&CPU0 THERMAL_NO_LIMIT 1>;
 			};
 			cpu1_cdev {
 				trip = <&cpu_freq_trip>;
 				cooling-device =
-					<&CPU1 THERMAL_NO_LIMIT 2>;
+					<&CPU1 THERMAL_NO_LIMIT 1>;
 			};
 			cpu2_cdev {
 				trip = <&cpu_freq_trip>;
 				cooling-device =
-					<&CPU2 THERMAL_NO_LIMIT 2>;
+					<&CPU2 THERMAL_NO_LIMIT 1>;
 			};
 			cpu3_cdev {
 				trip = <&cpu_freq_trip>;
 				cooling-device =
-					<&CPU3 THERMAL_NO_LIMIT 2>;
+					<&CPU3 THERMAL_NO_LIMIT 1>;
 			};
 			modem_lvl1 {
 				trip = <&modem_mon_trip0>;
@@ -188,8 +193,8 @@
 			hotplug_cpu1_cdev {
 				trip = <&cpu1_hotplug_trip>;
 				cooling-device =
-					<&CPU1 THERMAL_MAX_LIMIT
-						THERMAL_MAX_LIMIT>;
+					<&CPU1 THERMAL_NO_LIMIT
+						THERMAL_NO_LIMIT>;
 			};
 		};
 	};

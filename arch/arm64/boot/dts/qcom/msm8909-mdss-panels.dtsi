@@ -69,7 +69,3 @@
 	};
 };
 
-&dsi_auo_390p_cmd {
-	qcom,mdss-dsi-bl-pmic-control-type = "bl_ctrl_dcs";
-	qcom,panel-supply-entries = <&dsi_pm660_panel_pwr_supply>;
-};
