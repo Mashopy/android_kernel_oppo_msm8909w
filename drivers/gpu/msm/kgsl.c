@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -265,6 +265,7 @@ kgsl_mem_entry_create(void)
 		kref_get(&entry->refcount);
 	}
 
+   atomic_set(&entry->map_count, 0);
 	return entry;
 }
 #ifdef CONFIG_DMA_SHARED_BUFFER
@@ -458,9 +459,6 @@ static void kgsl_mem_entry_detach_process(struct kgsl_mem_entry *entry)
 
 	type = kgsl_memdesc_usermem_type(&entry->memdesc);
 	entry->priv->stats[type].cur -= entry->memdesc.size;
-
-	if (type != KGSL_MEM_ENTRY_ION)
-		entry->priv->gpumem_mapped -= entry->memdesc.mapsize;
 
 	spin_unlock(&entry->priv->mem_lock);
 
@@ -2090,14 +2088,6 @@ long kgsl_ioctl_cmdstream_freememontimestamp_ctxtid(
 	return ret;
 }
 
-static inline int _check_region(unsigned long start, unsigned long size,
-				uint64_t len)
-{
-	uint64_t end = ((uint64_t) start) + size;
-
-	return (end > len);
-}
-
 static int check_vma_flags(struct vm_area_struct *vma,
 		unsigned int flags)
 {
@@ -2112,23 +2102,27 @@ static int check_vma_flags(struct vm_area_struct *vma,
 	return -EFAULT;
 }
 
-static int check_vma(struct vm_area_struct *vma, struct file *vmfile,
-		struct kgsl_memdesc *memdesc)
+static int check_vma(unsigned long hostptr, u64 size)
 {
-	if (vma == NULL || vma->vm_file != vmfile)
-		return -EINVAL;
+	struct vm_area_struct *vma;
+	unsigned long cur = hostptr;
 
-	/* userspace may not know the size, in which case use the whole vma */
-	if (memdesc->size == 0)
-		memdesc->size = vma->vm_end - vma->vm_start;
-	/* range checking */
-	if (vma->vm_start != memdesc->useraddr ||
-		(memdesc->useraddr + memdesc->size) != vma->vm_end)
-		return -EINVAL;
-	return check_vma_flags(vma, memdesc->flags);
+	while (cur < (hostptr + size)) {
+		vma = find_vma(current->mm, cur);
+		if (!vma)
+			return false;
+
+		/* Don't remap memory that we already own */
+		if (vma->vm_file && vma->vm_file->f_op == &kgsl_fops)
+			return false;
+
+		cur = vma->vm_end;
+	}
+
+	return true;
 }
 
-static int memdesc_sg_virt(struct kgsl_memdesc *memdesc, struct file *vmfile)
+static int memdesc_sg_virt(struct kgsl_memdesc *memdesc, unsigned long useraddr)
 {
 	int ret = 0;
 	long npages = 0, i;
@@ -2151,18 +2145,16 @@ static int memdesc_sg_virt(struct kgsl_memdesc *memdesc, struct file *vmfile)
 	}
 
 	down_read(&current->mm->mmap_sem);
-	/* If we have vmfile, make sure we map the correct vma and map it all */
-	if (vmfile != NULL)
-		ret = check_vma(find_vma(current->mm, memdesc->useraddr),
-				vmfile, memdesc);
-
-	if (ret == 0) {
-		npages = get_user_pages(memdesc->useraddr,
-					sglen, write, pages, NULL);
-		ret = (npages < 0) ? (int)npages : 0;
+	if (!check_vma(useraddr, memdesc->size)) {
+		up_read(&current->mm->mmap_sem);
+		ret = -EFAULT;
+		goto out;
 	}
+
+	npages = get_user_pages(useraddr, sglen, write, pages, NULL);
 	up_read(&current->mm->mmap_sem);
 
+	ret = (npages < 0) ? (int)npages : 0;
 	if (ret)
 		goto out;
 
@@ -2191,29 +2183,34 @@ static int kgsl_setup_anon_useraddr(struct kgsl_pagetable *pagetable,
 {
 	/* Map an anonymous memory chunk */
 
+	int ret;
+
 	if (size == 0 || offset != 0 ||
 		!IS_ALIGNED(size, PAGE_SIZE))
 		return -EINVAL;
 
 	entry->memdesc.pagetable = pagetable;
 	entry->memdesc.size = (uint64_t) size;
-	entry->memdesc.useraddr = hostptr;
 	entry->memdesc.flags |= (uint64_t)KGSL_MEMFLAGS_USERMEM_ADDR;
 
 	if (kgsl_memdesc_use_cpu_map(&entry->memdesc)) {
-		int ret;
 
 		/* Register the address in the database */
 		ret = kgsl_mmu_set_svm_region(pagetable,
-			(uint64_t) entry->memdesc.useraddr, (uint64_t) size);
+				(uint64_t) hostptr, (uint64_t) size);
 
 		if (ret)
 			return ret;
 
-		entry->memdesc.gpuaddr = (uint64_t)  entry->memdesc.useraddr;
+		entry->memdesc.gpuaddr = (uint64_t) hostptr;
 	}
 
-	return memdesc_sg_virt(&entry->memdesc, NULL);
+	ret = memdesc_sg_virt(&entry->memdesc, hostptr);
+
+	if (ret && kgsl_memdesc_use_cpu_map(&entry->memdesc))
+		kgsl_mmu_put_gpuaddr(&entry->memdesc);
+
+	return ret;
 }
 
 #ifdef CONFIG_DMA_SHARED_BUFFER
@@ -2298,8 +2295,7 @@ static int kgsl_setup_dmabuf_useraddr(struct kgsl_device *device,
 		return ret;
 	}
 
-	/* Setup the user addr/cache mode for cache operations */
-	entry->memdesc.useraddr = hostptr;
+	/* Setup the cache mode for cache operations */
 	_setup_cache_mode(entry, vma);
 	up_read(&current->mm->mmap_sem);
 	return 0;
@@ -2487,7 +2483,7 @@ long kgsl_ioctl_gpuobj_import(struct kgsl_device_private *dev_priv,
 	return 0;
 
 unmap:
-	if (param->type == KGSL_USER_MEM_TYPE_DMABUF) {
+	if (kgsl_memdesc_usermem_type(&entry->memdesc) == KGSL_MEM_ENTRY_ION) {
 		kgsl_destroy_ion(entry->priv_data);
 		entry->memdesc.sgt = NULL;
 	}
@@ -2793,7 +2789,7 @@ long kgsl_ioctl_map_user_mem(struct kgsl_device_private *dev_priv,
 	return result;
 
 error_attach:
-	switch (memtype) {
+	switch (kgsl_memdesc_usermem_type(&entry->memdesc)) {
 	case KGSL_MEM_ENTRY_ION:
 		kgsl_destroy_ion(entry->priv_data);
 		entry->memdesc.sgt = NULL;
@@ -3312,7 +3308,12 @@ long kgsl_ioctl_gpumem_get_info(struct kgsl_device_private *dev_priv,
 	param->flags = (unsigned int) entry->memdesc.flags;
 	param->size = (size_t) entry->memdesc.size;
 	param->mmapsize = (size_t) kgsl_memdesc_footprint(&entry->memdesc);
-	param->useraddr = entry->memdesc.useraddr;
+	/*
+	 * Entries can have multiple user mappings so thre isn't any one address
+	 * we can report. Plus, the user should already know their mappings, so
+	 * there isn't any value in reporting it back to them.
+	 */
+	param->useraddr = 0;
 
 	kgsl_mem_entry_put(entry);
 	return result;
@@ -3781,9 +3782,6 @@ static int _sparse_bind(struct kgsl_process_private *process,
 	if (memdesc->gpuaddr)
 		return -EINVAL;
 
-	if (memdesc->useraddr != 0)
-		return -EINVAL;
-
 	pagetable = memdesc->pagetable;
 
 	/* Clear out any mappings */
@@ -4063,7 +4061,12 @@ long kgsl_ioctl_gpuobj_info(struct kgsl_device_private *dev_priv,
 	param->flags = entry->memdesc.flags;
 	param->size = entry->memdesc.size;
 	param->va_len = kgsl_memdesc_footprint(&entry->memdesc);
-	param->va_addr = (uint64_t) entry->memdesc.useraddr;
+	/*
+	 * Entries can have multiple user mappings so thre isn't any one address
+	 * we can report. Plus, the user should already know their mappings, so
+	 * there isn't any value in reporting it back to them.
+	 */
+	param->va_addr = 0;
 
 	kgsl_mem_entry_put(entry);
 	return 0;
@@ -4135,9 +4138,10 @@ kgsl_mmap_memstore(struct kgsl_device *device, struct vm_area_struct *vma)
 	unsigned int vma_size = vma->vm_end - vma->vm_start;
 
 	/* The memstore can only be mapped as read only */
-
 	if (vma->vm_flags & VM_WRITE)
 		return -EPERM;
+
+        vma->vm_flags &= ~VM_MAYWRITE;
 
 	if (memdesc->size  !=  vma_size) {
 		KGSL_MEM_ERR(device, "memstore bad size: %d should be %llu\n",
@@ -4168,24 +4172,21 @@ static void kgsl_gpumem_vm_open(struct vm_area_struct *vma)
 
 	if (kgsl_mem_entry_get(entry) == 0)
 		vma->vm_private_data = NULL;
+
+	atomic_inc(&entry->map_count);
 }
 
 static int
 kgsl_gpumem_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	struct kgsl_mem_entry *entry = vma->vm_private_data;
-	int ret;
 
 	if (!entry)
 		return VM_FAULT_SIGBUS;
 	if (!entry->memdesc.ops || !entry->memdesc.ops->vmfault)
 		return VM_FAULT_SIGBUS;
 
-	ret = entry->memdesc.ops->vmfault(&entry->memdesc, vma, vmf);
-	if ((ret == 0) || (ret == VM_FAULT_NOPAGE))
-		entry->priv->gpumem_mapped += PAGE_SIZE;
-
-	return ret;
+	return entry->memdesc.ops->vmfault(&entry->memdesc, vma, vmf);
 }
 
 static void
@@ -4196,7 +4197,13 @@ kgsl_gpumem_vm_close(struct vm_area_struct *vma)
 	if (!entry)
 		return;
 
-	entry->memdesc.useraddr = 0;
+	/*
+	 * Remove the memdesc from the mapped stat once all the mappings have
+	 * gone away
+	 */
+	if (!atomic_dec_return(&entry->map_count))
+		entry->priv->gpumem_mapped -= entry->memdesc.size;
+
 	kgsl_mem_entry_put(entry);
 }
 
@@ -4235,7 +4242,8 @@ get_mmap_entry(struct kgsl_process_private *private,
 		}
 	}
 
-	if (entry->memdesc.useraddr != 0) {
+	/* Don't allow ourselves to remap user memory */
+	if (entry->memdesc.flags & KGSL_MEMFLAGS_USERMEM_ADDR) {
 		ret = -EBUSY;
 		goto err_put;
 	}
@@ -4447,6 +4455,118 @@ static unsigned long _get_svm_area(struct kgsl_process_private *private,
 	return result;
 }
 
+//#ifdef WEAROS_EDIT
+//#Wei.Lv@Wear.Android.Framework.Memory, 2020/05/15, dump process's map and ksgl mem when gpu oom
+static int last_oom_dump_pid;
+static bool kgsl_oom_dump_done;
+static int kgsl_dump_oom_info(int pid)
+{
+	int ret;
+	struct file *fp;
+	char path[64];
+	char *buff, *s_start;
+	int count = 0;
+    int i = 0;
+	mm_segment_t old_fs;
+	loff_t pos;
+
+	buff = (char*)kmalloc(PAGE_SIZE, GFP_KERNEL);
+	if(!buff) {
+		pr_err("[Qcom_debug] kmalloc(PAGE_SIZE, GFP_KERNEL) is failed, exit!\n");
+		ret = -1;
+		goto err_out;
+	}
+
+	// Part 1- dump /proc/$pid/maps
+	sprintf(path, "/proc/%d/maps", pid);
+	fp = filp_open(path, O_RDONLY, 0);
+	if (IS_ERR(fp)) {
+		pr_err("[Qcom_debug] Open %s failed, error %ld\n", path,(unsigned long)fp);
+		ret = -1;
+		goto err_out;
+	}
+	pr_err("[Qcom_debug] Dumping %s\n", path);
+	pr_err("[Qcom_debug] startaddr-endaddr flags offset major:minor size node\n");
+	do {
+		struct mm_struct *mm = current->mm;
+		old_fs = get_fs();
+		set_fs(KERNEL_DS);
+		pos = fp->f_pos;
+		up_write(&mm->mmap_sem);
+		count = vfs_read(fp, buff, PAGE_SIZE-1, &pos);
+		ret = down_write_killable(&mm->mmap_sem);
+		set_fs(old_fs);
+
+		if(count < 0) {
+			ret = -1;
+			pr_err("[Qcom_debug] read file %s failed!\n", path);
+			goto err_out;
+		}
+		fp->f_pos = pos;
+
+		s_start = buff;
+		for(i = 0; i < count; i++) {
+			if(buff[i] == '\n'){
+				buff[i] = '\0';
+				pr_err("[Qcom_debug] %s\n",s_start);
+				s_start = buff + i + 1;
+			}
+		}
+	} while (count > 0);
+	filp_close(fp, NULL);
+	// Part 1- end
+
+	// Part 2- dump /d/kgsl/proc/$pid/mem
+	sprintf(path,"/d/kgsl/proc/%d/mem", pid);
+	fp = filp_open(path, O_RDONLY, 0);
+	if (IS_ERR(fp)) {
+		pr_err("[Qcom_debug] Open %s failed, error %ld, try again\n", path, (unsigned long)fp);
+
+		sprintf(path,"/sys/kernel/debug/kgsl/proc/%d/mem", pid);
+		fp = filp_open(path, O_RDONLY, 0);
+		if (IS_ERR(fp)) {
+			pr_err("[Qcom_debug] Open %s failed, error %ld\n", path, (unsigned long)fp);
+			ret = -1;
+			goto err_out;
+		}
+	}
+	pr_err("[Qcom_debug] Dumping %s\n", path);
+	do {
+		//struct mm_struct *mm = current->mm;
+		old_fs = get_fs();
+		set_fs(KERNEL_DS);
+		pos = fp->f_pos;
+		//up_write(&mm->mmap_sem);
+		count = vfs_read(fp, buff, PAGE_SIZE-1, &pos);
+		//ret = down_write_killable(&mm->mmap_sem);
+		set_fs(old_fs);
+
+		if(count < 0) {
+			ret = -1;
+			pr_err("[Qcom_debug] read file %s failed!\n", path);
+			goto err_out;
+		}
+		fp->f_pos = pos;
+
+		s_start = buff;
+		for(i = 0; i < count; i++) {
+			if(buff[i] == '\n'){
+				buff[i] = '\0';
+				pr_err("[Qcom_debug] %s\n",s_start);
+				s_start = buff + i + 1;
+			}
+		}
+	} while (count > 0);
+	filp_close(fp, NULL);
+	// Part 2 - end
+
+	ret = 0;
+err_out:
+	kfree(buff);
+	return ret;
+}
+//#endif /* WEAROS_EDIT */
+
 static unsigned long
 kgsl_get_unmapped_area(struct file *file, unsigned long addr,
 			unsigned long len, unsigned long pgoff,
@@ -4486,7 +4606,14 @@ kgsl_get_unmapped_area(struct file *file, unsigned long addr,
 				private->pid, current->mm->mmap_base, addr,
 				pgoff, len, (int) val);
 	}
-
+    //#ifdef WEAROS_EDIT
+    //#Wei.Lv@Wear.Android.Framework.Memory, 2020/05/15, dump process's map and ksgl mem when gpu oom
+	if (IS_ERR_VALUE(val) && (!kgsl_oom_dump_done || (private->pid != last_oom_dump_pid))) {
+		int ret = kgsl_dump_oom_info(private->pid);
+		kgsl_oom_dump_done = !ret;
+		last_oom_dump_pid = private->pid;
+	}
+    //#endif /* WEAROS_EDIT */
 put:
 	kgsl_mem_entry_put(entry);
 	return val;
@@ -4560,9 +4687,10 @@ static int kgsl_mmap(struct file *file, struct vm_area_struct *vma)
 
 	vma->vm_file = file;
 
-	entry->memdesc.useraddr = vma->vm_start;
+	if (atomic_inc_return(&entry->map_count) == 1)
+		entry->priv->gpumem_mapped += entry->memdesc.size;
 
-	trace_kgsl_mem_mmap(entry);
+	trace_kgsl_mem_mmap(entry, vma->vm_start);
 	return 0;
 }
 
