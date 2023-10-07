@@ -59,6 +59,11 @@ static phys_addr_t tcsr_boot_misc_detect;
 static void scm_disable_sdi(void);
 static bool force_warm_reboot;
 
+#ifdef CONFIG_OPPO_CHARGING_MODIFY
+// wsw.bsp.charger.factory,2019/12/19, enable ship mode
+extern int oppo_enable_ship_mode_flag;
+extern void oppo_set_ship_mode(void);
+#endif
 #ifdef CONFIG_QCOM_DLOAD_MODE
 /* Runtime could be only changed value once.
  * There is no API from TZ to re-enable the registers.
@@ -307,6 +312,22 @@ static void msm_restart_prepare(const char *cmd)
 		pr_info("Forcing a warm reset of the system\n");
 
 	/* Hard reset the PMIC unless memory contents must be maintained. */
+#ifdef CONFIG_OPPO
+// WSW.BSP.stability enable warmreset and set bootmode as kernel when panic happen
+	if (in_panic){
+		//warm reset
+		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
+		qpnp_pon_set_restart_reason(
+					PON_RESTART_REBOOT_KERNEL);
+		flush_cache_all();
+
+		/*outer_flush_all is not supported by 64bit kernel*/
+#ifndef CONFIG_ARM64
+		outer_flush_all();
+#endif
+		return;
+	}
+#endif
 	if (force_warm_reboot || need_warm_reset)
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
 	else
@@ -364,11 +385,58 @@ static void msm_restart_prepare(const char *cmd)
 			}
 		} else if (!strncmp(cmd, "edl", 3)) {
 			enable_emergency_dload_mode();
+#ifdef CONFIG_OPPO
+// WSW.BSP.kernel modify all the reboot mode as hardware reboot
+/* OPPO 2013.07.09 hewei modify begin for restart mode*/
+		} else if (!strncmp(cmd, "rf", 2)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_RF_MODE);
+		} else if (!strncmp(cmd, "wlan", 4)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_WLAN_MODE);
+		#ifdef USE_MOS_MODE
+		} else if (!strncmp(cmd, "mos", 3)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_MOS_MODE);
+		#endif
+		} else if (!strncmp(cmd, "ftm", 3)) {
+			qpnp_pon_set_restart_reason(
+					PON_RESTART_FACTORY_MODE);
+		} else if (!strncmp(cmd, "kernel", 6)) {
+			qpnp_pon_set_restart_reason(
+					PON_RESTART_REBOOT_KERNEL);
+		} else if (!strncmp(cmd, "modem", 5)) {
+			qpnp_pon_set_restart_reason(
+					PON_RESTART_REBOOT_MODEM);
+		} else if (!strncmp(cmd, "android", 7)) {
+			qpnp_pon_set_restart_reason(
+					PON_RESTART_REBOOT_ANDROID);
+		} else if (!strncmp(cmd, "silence", 7)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_SILENCE);
+		}else if (!strncmp(cmd, "sau", 3)) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_SAU);
+		} else if (!strncmp(cmd, "safe", 4)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_SAFE);
+#endif 
 		} else {
+#ifdef CONFIG_OPPO
+// WSW.BSP.kernel modify all the reboot mode as hardware reboot
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REBOOT_NORMAL);
+#endif
 			__raw_writel(0x77665501, restart_reason);
 		}
 	}
-
+#ifdef CONFIG_OPPO
+// WSW.BSP.kernel modify all the reboot mode as hardware reboot
+	else
+	{
+		qpnp_pon_set_restart_reason(
+				PON_RESTART_REBOOT_NORMAL);
+	}
+#endif
 	flush_cache_all();
 
 	/*outer_flush_all is not supported by 64bit kernel*/
@@ -427,14 +495,36 @@ static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
 
 static void do_msm_poweroff(void)
 {
+#ifdef CONFIG_OPPO
+/* wsw.bsp.kernel,2019/12/30, set pon debounce to 250ms(0x0C) */
+	extern void oppo_set_pon_debounce_ctl(uint8_t val);
+	oppo_set_pon_debounce_ctl(0x0C);
+#endif
+
 	pr_notice("Powering off the SoC\n");
 
+#ifdef CONFIG_OPPO_CHARGING_MODIFY
+// wsw.bsp.charger.factory,2019/12/19, enable ship mode
+    if (oppo_enable_ship_mode_flag) {
+        pr_notice("call oppo_set_ship_mode()\n");
+        oppo_set_ship_mode();
+    } else {
+        pr_notice("call orgin do_msm_poweroff()\n");
+        set_dload_mode(0);
+        scm_disable_sdi();
+        qpnp_pon_system_pwr_off(PON_POWER_OFF_SHUTDOWN);
+
+        halt_spmi_pmic_arbiter();
+        deassert_ps_hold();
+    }
+#else
 	set_dload_mode(0);
 	scm_disable_sdi();
 	qpnp_pon_system_pwr_off(PON_POWER_OFF_SHUTDOWN);
 
 	halt_spmi_pmic_arbiter();
 	deassert_ps_hold();
+#endif
 
 	msleep(10000);
 	pr_err("Powering off has failed\n");

@@ -34,6 +34,10 @@
 #define DEFAULT_MDP_TRANSFER_TIME 14000
 
 #define VSYNC_DELAY msecs_to_jiffies(17)
+#define EVERDISPLAY_320X360_CMD_SIGNATURE 0x018001
+#define VISIONOX_402X476_CMD_SIGNATURE 0x098001
+extern unsigned int oppo_panel_id;
+extern unsigned int panel_present;
 
 DEFINE_LED_TRIGGER(bl_led_trigger);
 
@@ -230,7 +234,7 @@ static void mdss_dsi_panel_bklt_dcs(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 			return;
 	}
 
-	pr_debug("%s: level=%d\n", __func__, level);
+	pr_info("%s: level=%d\n", __func__, level);
 
 	led_pwm1[1] = (unsigned char)level;
 
@@ -248,6 +252,80 @@ static void mdss_dsi_panel_bklt_dcs(struct mdss_dsi_ctrl_pdata *ctrl, int level)
 
 	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
 }
+
+static char hbm_disable[2] = {0x66, 0x0};
+static char hbm_enable[2] = {0x66, 0x2};
+static struct dsi_cmd_desc hbm_off = {
+	{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(hbm_disable)},
+	hbm_disable
+};
+static struct dsi_cmd_desc hbm_on = {
+	{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(hbm_enable)},
+	hbm_enable
+};
+
+void mdss_dsi_panel_bklt_hbm_switch(struct mdss_dsi_ctrl_pdata *ctrl, int value)
+{
+	struct dcs_cmd_req cmdreq;
+	struct mdss_panel_info *pinfo;
+
+	pinfo = &(ctrl->panel_data.panel_info);
+	if (pinfo->dcs_cmd_by_left) {
+		if (ctrl->ndx != DSI_CTRL_LEFT)
+			return;
+	}
+
+	pr_debug("%s: value=%d\n", __func__, value);
+
+	hbm_disable[1] = (unsigned char)value;
+	memset(&cmdreq, 0, sizeof(cmdreq));
+
+	if(value == 0)
+	    cmdreq.cmds = &hbm_off;
+	else if(value == 1)
+	    cmdreq.cmds = &hbm_on;
+	cmdreq.cmds_cnt = 1;
+	cmdreq.flags = CMD_REQ_COMMIT;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+
+	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+	return;
+}
+EXPORT_SYMBOL(mdss_dsi_panel_bklt_hbm_switch);
+
+static char te[2] = {0x35, 0x00};	   /*enable:0x00, disable:0x02*/
+static struct dsi_cmd_desc te_ctl_cmd = {
+	{DTYPE_DCS_WRITE1, 1, 0, 0, 1, sizeof(te)},
+	te
+};
+
+void mdss_dsi_panel_te_ctrl(struct mdss_dsi_ctrl_pdata *ctrl, int value)
+{
+	struct dcs_cmd_req cmdreq;
+	struct mdss_panel_info *pinfo;
+
+	pinfo = &(ctrl->panel_data.panel_info);
+	if (pinfo->dcs_cmd_by_left) {
+		if (ctrl->ndx != DSI_CTRL_LEFT)
+			return;
+	}
+
+	pr_debug("%s: value=%d\n", __func__, value);
+
+	te[1] = (unsigned char)value;
+	memset(&cmdreq, 0, sizeof(cmdreq));
+
+	cmdreq.cmds = &te_ctl_cmd;
+	cmdreq.cmds_cnt = 1;
+	cmdreq.flags = CMD_REQ_COMMIT;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+
+	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+	return;
+}
+EXPORT_SYMBOL(mdss_dsi_panel_te_ctrl);
 
 static void mdss_dsi_panel_set_idle_mode(struct mdss_panel_data *pdata,
 							bool enable)
@@ -1042,7 +1120,9 @@ static int mdss_dsi_panel_off(struct mdss_panel_data *pdata)
 
 	if (ctrl->off_cmds.cmd_cnt)
 		mdss_dsi_panel_cmds_send(ctrl, &ctrl->off_cmds, CMD_REQ_COMMIT);
-
+#ifdef CONFIG_OPPO
+	msleep(80);
+#endif
 	mdss_dsi_panel_off_hdmi(ctrl, pinfo);
 
 end:
@@ -2008,8 +2088,11 @@ static void mdss_dsi_parse_esd_params(struct device_node *np,
 	const char *string;
 	struct mdss_panel_info *pinfo = &ctrl->panel_data.panel_info;
 
-	pinfo->esd_check_enabled = of_property_read_bool(np,
-		"qcom,esd-check-enabled");
+	/*  WSW.BSP.Kernel, 2020/02/04,  Add for panel ESD */
+	if(panel_present) {
+		pinfo->esd_check_enabled = of_property_read_bool(np,
+			"qcom,esd-check-enabled");
+	}
 
 	if (!pinfo->esd_check_enabled)
 		return;
@@ -2994,6 +3077,15 @@ int mdss_dsi_panel_init(struct device_node *node,
 	} else {
 		pr_info("%s: Panel Name = %s\n", __func__, panel_name);
 		strlcpy(&pinfo->panel_name[0], panel_name, MDSS_MAX_PANEL_LEN);
+
+		if(0 == strcmp("Everdisplay 320x360 (RM69090) command mode dsi panel",panel_name))
+		{
+			oppo_panel_id = EVERDISPLAY_320X360_CMD_SIGNATURE;
+		}
+		else if( 0 == strcmp("Visionox 402x476 (RM69090) command mode dsi panel",panel_name))
+		{
+			oppo_panel_id = VISIONOX_402X476_CMD_SIGNATURE;
+		}
 	}
 	rc = mdss_panel_parse_dt(node, ctrl_pdata);
 	if (rc) {

@@ -1412,15 +1412,15 @@ static void hid_output_field(const struct hid_device *hid,
 	}
 }
 
-/*
- * Compute the size of a report.
- */
+ /*
++ * Compute the size of a report.
++ */
 static size_t hid_compute_report_size(struct hid_report *report)
 {
-	if (report->size)
-		return ((report->size - 1) >> 3) + 1;
+       if (report->size)
+               return ((report->size - 1) >> 3) + 1;
 
-	return 0;
+       return 0;
 }
 
 /*
