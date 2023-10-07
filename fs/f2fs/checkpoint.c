@@ -1265,15 +1265,23 @@ static void update_ckpt_flags(struct f2fs_sb_info *sbi, struct cp_control *cpc)
 	else
 		__clear_ckpt_flags(ckpt, CP_DISABLED_QUICK_FLAG);
 
-	if (is_sbi_flag_set(sbi, SBI_QUOTA_SKIP_FLUSH))
+	if (is_sbi_flag_set(sbi, SBI_QUOTA_SKIP_FLUSH)){
 		__set_ckpt_flags(ckpt, CP_QUOTA_NEED_FSCK_FLAG);
+	}
+	else {
+		pr_err("clear FSCK FLAG");
+		__clear_ckpt_flags(ckpt, CP_QUOTA_NEED_FSCK_FLAG);
+	}
+
 	/*
 	 * TODO: we count on fsck.f2fs to clear this flag until we figure out
 	 * missing cases which clear it incorrectly.
 	 */
 
 	if (is_sbi_flag_set(sbi, SBI_QUOTA_NEED_REPAIR))
+	{
 		__set_ckpt_flags(ckpt, CP_QUOTA_NEED_FSCK_FLAG);
+	}
 
 	/* set this flag to activate crc|cp_ver for recovery */
 	__set_ckpt_flags(ckpt, CP_CRC_RECOVERY_FLAG);
