@@ -1,38 +1,38 @@
 # auto-detect subdirs
 ifeq ($(CONFIG_ARCH_SDM450), y)
-include $(srctree)/techpack/audio/config/sdm450auto.conf
-export $(shell sed 's/=.*//' $(srctree)/techpack/audio/config/sdm450auto.conf)
+include $(srctree)/techpack/audio-89xx/config/sdm450auto.conf
+export $(shell sed 's/=.*//' $(srctree)/techpack/audio-89xx/config/sdm450auto.conf)
 endif
 ifeq ($(CONFIG_ARCH_MSM8953), y)
-include $(srctree)/techpack/audio/config/msm8953auto.conf
-export $(shell sed 's/=.*//' $(srctree)/techpack/audio/config/msm8953auto.conf)
+include $(srctree)/techpack/audio-89xx/config/msm8953auto.conf
+export $(shell sed 's/=.*//' $(srctree)/techpack/audio-89xx/config/msm8953auto.conf)
 endif
 ifeq ($(CONFIG_ARCH_MSM8909), y)
-include $(srctree)/techpack/audio/config/msm8909auto.conf
-export $(shell sed 's/=.*//' $(srctree)/techpack/audio/config/msm8909auto.conf)
+include $(srctree)/techpack/audio-89xx/config/msm8909auto.conf
+export $(shell sed 's/=.*//' $(srctree)/techpack/audio-89xx/config/msm8909auto.conf)
 endif
 
 # Use USERINCLUDE when you must reference the UAPI directories only.
 USERINCLUDE     += \
-                -I$(srctree)/techpack/audio/include/uapi \
+                -I$(srctree)/techpack/audio-89xx/include/uapi \
 
 # Use LINUXINCLUDE when you must reference the include/ directory.
 # Needed to be compatible with the O= option
 LINUXINCLUDE    += \
-                -I$(srctree)/techpack/audio/include/uapi \
-                -I$(srctree)/techpack/audio/include
+                -I$(srctree)/techpack/audio-89xx/include/uapi \
+                -I$(srctree)/techpack/audio-89xx/include
 
 ifeq ($(CONFIG_ARCH_SDM450), y)
 LINUXINCLUDE    += \
-                -include $(srctree)/techpack/audio/config/sdm450autoconf.h
+                -include $(srctree)/techpack/audio-89xx/config/sdm450autoconf.h
 endif
 ifeq ($(CONFIG_ARCH_MSM8953), y)
 LINUXINCLUDE    += \
-                -include $(srctree)/techpack/audio/config/msm8953autoconf.h
+                -include $(srctree)/techpack/audio-89xx/config/msm8953autoconf.h
 endif
 ifeq ($(CONFIG_ARCH_MSM8909), y)
 LINUXINCLUDE    += \
-                -include $(srctree)/techpack/audio/config/msm8909autoconf.h
+                -include $(srctree)/techpack/audio-89xx/config/msm8909autoconf.h
 endif
 
 obj-y += asoc/
