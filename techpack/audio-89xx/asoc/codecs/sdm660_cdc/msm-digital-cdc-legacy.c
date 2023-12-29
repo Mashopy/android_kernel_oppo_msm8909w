@@ -1780,7 +1780,8 @@ static const struct snd_soc_dapm_widget msm_dig_dapm_widgets[] = {
 	SND_SOC_DAPM_SUPPLY("TX_I2S_CLK",
 		MSM89XX_CDC_CORE_CLK_TX_I2S_CTL, 4, 0, NULL, 0),
 
-	SND_SOC_DAPM_SUPPLY("DIGITAL_REGULATOR", SND_SOC_NOPM,
+	/* ouyangxun modify the name from DIGITAL_REGULATOR to DIGIT_REGULATOR to match the name in dts */
+	SND_SOC_DAPM_SUPPLY("DIGIT_REGULATOR", SND_SOC_NOPM,
 		ON_DEMAND_DIGITAL, 0,
 		msm_dig_cdc_enable_on_demand_supply,
 		SND_SOC_DAPM_PRE_PMU |

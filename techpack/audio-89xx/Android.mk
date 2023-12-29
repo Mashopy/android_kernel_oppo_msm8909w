@@ -35,3 +35,6 @@ $(shell rm -rf $(PRODUCT_OUT)/obj/vendor/qcom/opensource/audio-kernel/asoc/codec
 include $(MY_LOCAL_PATH)/asoc/codecs/sdm660_cdc/Android.mk
 include $(MY_LOCAL_PATH)/asoc/codecs/msm_sdw/Android.mk
 endif
+
+# PSW.MM.AudioDriver.Codec, 2020/01/14, Add for tfa9895 codec
+include $(MY_LOCAL_PATH)/asoc/codecs/tfa98xx/Android.mk
